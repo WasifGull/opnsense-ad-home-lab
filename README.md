@@ -8,6 +8,7 @@ Built as part of my hands-on networking practice while pursuing my Master's in C
 
 ## Goal
 
+
 Design and configure a virtual office network where:
 
 - A dedicated **firewall (OPNsense)** controls all traffic between the simulated internet (WAN) and the internal LAN.
