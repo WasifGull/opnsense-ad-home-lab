@@ -1,20 +1,17 @@
 # OPNsense + Active Directory Home Lab
 
-A virtualized home lab simulating a small office network: an **OPNsense firewall**, a **Windows Server 2022 Active Directory domain controller**, and a **Windows 10/11 client** joined to the domain — all running in VirtualBox.
+A virtualized home lab simulating a small office network: an **OPNsense firewall**, a **Windows Server 2022 Active Directory domain controller**, and a **Windows Server client** joined to the domain — all running in VirtualBox.
 
 Built as part of my hands-on networking practice while pursuing my Master's in Computer Engineering for IoT Systems at Hochschule Nordhausen.
 
-> 🚧 **Status:** Work in progress. This README will be updated with full configuration steps, screenshots, and test results as the lab is completed.
+## What this lab demonstrates
 
-## Goal
-
-
-Design and configure a virtual office network where:
-
-- A dedicated **firewall (OPNsense)** controls all traffic between the simulated internet (WAN) and the internal LAN.
-- An internal **Active Directory domain** (`corp.local`) provides centralized authentication, DNS, and DHCP services.
-- A **domain-joined client workstation** can log in with domain credentials and access internal resources.
-- Firewall rules enforce that the LAN can reach the internet, but the internet cannot initiate connections into the LAN.
+- Designing a segmented network with a dedicated firewall between the simulated WAN and an internal LAN
+- Building an Active Directory forest from scratch and creating a new domain (`crop.local`)
+- Configuring authoritative DNS for the internal domain
+- Configuring DHCP with scope options that push the correct gateway and DNS to clients
+- Joining a Windows machine to the domain and authenticating as a domain user
+- Diagnosing and resolving DNS/firewall issues that prevent domain join
 
 ## Topology
 
@@ -22,66 +19,83 @@ Design and configure a virtual office network where:
    [Host Machine — running VirtualBox]
                   |
    ┌──────────────┴──────────────┐
-   │  Virtual Network "WAN-Net"  │  ── NAT to host's internet
+   │  VirtualBox NAT (simulated  │  ── upstream internet
+   │  WAN for OPNsense)          │
    └──────────────┬──────────────┘
                   |
             [OPNsense VM]
-            WAN: NAT
+            WAN: 10.0.2.x (DHCP from VirtualBox NAT)
             LAN: 192.168.50.1/24
                   |
    ┌──────────────┴──────────────┐
-   │ Virtual Network "LAN-Net"  │
-   │      192.168.50.0/24       │
+   │ VirtualBox NAT Network       │
+   │      'LAN-Net'              │
+   │      192.168.50.0/24        │
    └──┬──────────────────────┬──┘
       │                      │
-[Windows Server 2022]   [Windows Client]
-192.168.50.10           DHCP from server
-DC + AD + DNS + DHCP    Joined to corp.local
+[Windows Server 2022]   [Windows Server 2022]
+   DC01                   CLIENT01
+   192.168.50.10          192.168.50.100 (DHCP)
+   AD DS · DNS · DHCP     Joined to crop.local
 ```
 
 ## Components
 
 | Role | OS | Hostname | IP |
 |---|---|---|---|
-| Firewall / Router | OPNsense | `opnsense-fw` | WAN: NAT · LAN: 192.168.50.1 |
-| Domain Controller | Windows Server 2022 | `DC01` | 192.168.50.10 |
-| Client Workstation | Windows 10 / 11 | `CLIENT01` | DHCP |
+| Firewall / Router | OPNsense 26.1 | `opnsense-fw` | WAN: NAT · LAN: 192.168.50.1 |
+| Domain Controller | Windows Server 2022 (Eval) | `DC01` | 192.168.50.10 (static) |
+| Client | Windows Server 2022 (Eval) | `CLIENT01` | 192.168.50.100 (DHCP) |
 
-## Planned configuration
+VirtualBox network: a NAT Network named `LAN-Net` (`192.168.50.0/24`, VirtualBox DHCP disabled — DHCP handled by DC01).
 
-### OPNsense
-- WAN interface using VirtualBox NAT (provides upstream internet)
-- LAN interface on internal network with IP 192.168.50.1/24
-- Firewall rules: LAN → WAN allowed, WAN → LAN blocked by default
-- (DHCP disabled on OPNsense — handled by the Windows DC instead)
+## OPNsense configuration
 
-### Windows Server 2022 (DC01)
-- Static IP 192.168.50.10, gateway 192.168.50.1, DNS pointing to itself
-- Active Directory Domain Services role installed
-- New forest created: `corp.local`
-- DNS service running on the DC
-- DHCP role installed, scope `192.168.50.100 – 192.168.50.200`, options pushing DC as DNS and OPNsense as gateway
+- WAN interface (`em0`) on VirtualBox NAT, gets its address via DHCP from the host
+- LAN interface (`em1`) statically set to `192.168.50.1/24`
+- DHCP server on LAN is **disabled** — DHCP is handled by DC01 in Active Directory
+- Web GUI accessible from LAN at `https://192.168.50.1`
 
-### Windows Client (CLIENT01)
-- Configured for DHCP
-- Joined to `corp.local` domain
-- Login tested with a domain user account
+## Domain Controller configuration (DC01)
 
-## Verification (planned)
+- Static IP `192.168.50.10/24`, gateway `192.168.50.1`, DNS pointing to itself (`127.0.0.1`)
+- Roles installed: **Active Directory Domain Services**, **DNS Server**, **DHCP Server**
+- New forest created: **`crop.local`**
+- DHCP scope: `192.168.50.100 – 192.168.50.200`
+  - Router option: `192.168.50.1` (OPNsense)
+  - DNS server option: `192.168.50.10` (the DC itself)
+  - Parent domain: `crop.local`
 
-| Test | Expected |
+## Domain Join (CLIENT01)
+
+- Fresh Windows Server 2022 install on LAN-Net
+- Received DHCP lease from DC01: `192.168.50.100/24`, gateway `192.168.50.1`, DNS `192.168.50.10`
+- Renamed to `CLIENT01` and joined to the `crop.local` domain
+- Confirmed `whoami` returns `crop\administrator` after domain login
+
+## Verification
+
+| Test | Result |
 |---|---|
-| OPNsense web UI reachable from LAN | ✅ |
-| Client receives DHCP lease from DC01 | ✅ |
-| Client resolves `corp.local` via DC01 DNS | ✅ |
-| Client successfully joins the domain | ✅ |
-| Domain user can log in on the client | ✅ |
-| Client can ping a public host (e.g., 1.1.1.1) | ✅ |
-| Public host cannot initiate connection into LAN | ✅ |
+| OPNsense LAN interface responds to ping from DC01 | ✅ |
+| DC01 promoted to Domain Controller with healthy AD DS + DNS | ✅ |
+| DHCP scope active and authorized in AD | ✅ |
+| CLIENT01 receives DHCP lease automatically from DC01 | ✅ |
+| CLIENT01 can `nslookup crop.local` → resolves to 192.168.50.10 | ✅ |
+| CLIENT01 successfully joins the `crop.local` domain | ✅ |
+| Logging in as `crop\Administrator` on CLIENT01 succeeds | ✅ |
+| `whoami` on CLIENT01 returns `crop\administrator` | ✅ |
 
-## Skills demonstrated (when complete)
+## Troubleshooting notes
 
-`OPNsense` · `Firewall Configuration` · `Active Directory` · `Windows Server` · `DNS` · `DHCP` · `VirtualBox` · `Network Design` · `Domain Join` · `Network Segmentation`
+The lab surfaced a couple of real-world issues worth recording:
+
+- **CLIENT01 initially failed DHCP**, getting an APIPA (`169.254.x.x`) address. Resolved by running `ipconfig /release` and `ipconfig /renew`, which forced a fresh DHCP discovery once all three VMs were running.
+- **First domain join attempt failed** with *"An Active Directory Domain Controller for the domain crop.local could not be contacted."* The cause was the Windows Defender Firewall on DC01 blocking inbound DNS queries on UDP/53 — `nslookup crop.local` from CLIENT01 timed out even though ICMP (ping) worked. Resolved by disabling the firewall on DC01 for the lab (production fix would be to add explicit allow rules for DNS instead).
+
+## Skills demonstrated
+
+`OPNsense` · `Firewall Configuration` · `Active Directory Domain Services` · `Windows Server 2022` · `DNS` · `DHCP` · `Domain Join` · `VirtualBox` · `Network Design` · `Troubleshooting`
 
 ---
 
